@@ -23,8 +23,6 @@ Bazel builds bottom-up in waves. Phase 0 (leaves) builds first in parallel, then
 - **Bottleneck detection** — phases with few targets blocking many are flagged with their blocking ratio
 - **Click any phase** to see its targets and highlight them on the graph
 
-Cycles at the package level (which are normal in Bazel) are handled via SCC condensation — no incorrect results.
-
 ### Impact Analysis
 
 Click "Compute Impact Rankings" and Bazel View tests **every node** in your graph: what happens if it's removed? Results are ranked by impact:
