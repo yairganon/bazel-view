@@ -609,17 +609,17 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
     const dag = pathResult.pathDag;
     if (dag.size === 0) return [];
 
-    const levels: { nodes: string[]; isGap: boolean }[] = [];
+    const levels: { nodes: string[] }[] = [];
     let current = new Set([pathResult.from]);
     const visited = new Set<string>();
 
-    while (current.size > 0) {
+    // BFS level-by-level with safety limit to prevent infinite loops
+    let safety = 0;
+    while (current.size > 0 && safety++ < 200) {
       const levelNodes = Array.from(current);
-      const isSinglePath = levelNodes.length === 1;
-      levels.push({ nodes: levelNodes, isGap: false });
+      levels.push({ nodes: levelNodes });
       for (const n of levelNodes) visited.add(n);
 
-      // Collect next level: all children of current nodes that haven't been visited
       const next = new Set<string>();
       for (const nodeId of current) {
         const dagNode = dag.get(nodeId);

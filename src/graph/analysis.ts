@@ -801,14 +801,16 @@ export function findAllPaths(
   const nodePathCount = new Map<string, number>();
 
   for (const path of allPaths) {
-    for (let i = 0; i < path.length; i++) {
-      nodePathCount.set(path[i], (nodePathCount.get(path[i]) ?? 0) + 1);
-      if (!dagChildren.has(path[i])) dagChildren.set(path[i], new Set());
-      if (!dagParents.has(path[i])) dagParents.set(path[i], new Set());
-      if (i < path.length - 1) {
-        dagChildren.get(path[i])!.add(path[i + 1]);
-        dagParents.get(path[i + 1])!.add(path[i]);
-      }
+    // First pass: ensure all nodes have entries in maps
+    for (const nodeId of path) {
+      if (!dagChildren.has(nodeId)) dagChildren.set(nodeId, new Set());
+      if (!dagParents.has(nodeId)) dagParents.set(nodeId, new Set());
+      nodePathCount.set(nodeId, (nodePathCount.get(nodeId) ?? 0) + 1);
+    }
+    // Second pass: add edges
+    for (let i = 0; i < path.length - 1; i++) {
+      dagChildren.get(path[i])!.add(path[i + 1]);
+      dagParents.get(path[i + 1])!.add(path[i]);
     }
   }
 
