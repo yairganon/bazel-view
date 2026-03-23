@@ -762,7 +762,7 @@ export function findAllPaths(
   for (const edge of graph.edges) forward.get(edge.source)?.push(edge.target);
 
   // 1. K-shortest paths
-  const allPaths = yenKShortest(forward, from, to, 10);
+  const allPaths = yenKShortest(forward, from, to, 50);
 
   if (allPaths.length === 0) {
     return {
