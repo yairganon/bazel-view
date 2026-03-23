@@ -862,10 +862,10 @@ export function findAllPaths(
   }
 
   // 2. Diverse paths (block each intermediate node to find different routes)
-  const diversePaths = findDiversePaths(forward, from, to, shortest, 3000);
+  const diversePaths = findDiversePaths(forward, from, to, shortest, 8000);
 
   // 3. K-shortest paths (variations of shortest route)
-  const yenPaths = yenKShortest(forward, from, to, 20, 2000);
+  const yenPaths = yenKShortest(forward, from, to, 30, 4000);
 
   // Merge all: diverse paths first (most different), then Yen's (variations)
   const allPathKeys = new Set<string>();
