@@ -771,6 +771,11 @@ function yenKShortest(
  * that skips that node entirely — this discovers paths through
  * completely different parts of the graph.
  */
+/**
+ * Find diverse paths by iteratively blocking intermediates.
+ * Each new path reveals new nodes to block, which discovers more paths.
+ * Keeps going until no new paths are found or time runs out.
+ */
 function findDiversePaths(
   forward: AdjList,
   from: string,
@@ -783,27 +788,44 @@ function findDiversePaths(
   seen.add(shortestPath.join('→'));
   const t0 = Date.now();
 
-  // For each intermediate node in the shortest path, block it and find an alternative
-  const intermediates = shortestPath.slice(1, -1);
-  for (const blocked of intermediates) {
-    if (Date.now() - t0 > timeLimitMs) break;
+  // Collect all intermediates to try blocking — start with shortest, grow as we find more
+  const triedNodes = new Set<string>();
+  const queue = [...shortestPath.slice(1, -1)]; // start with shortest path's intermediates
+
+  while (queue.length > 0 && Date.now() - t0 < timeLimitMs) {
+    const blocked = queue.shift()!;
+    if (triedNodes.has(blocked)) continue;
+    triedNodes.add(blocked);
 
     const path = bfsPath(forward, from, to, new Set([blocked]));
-    if (path) {
-      const key = path.join('→');
-      if (!seen.has(key)) {
-        seen.add(key);
-        paths.push(path);
+    if (!path) continue;
 
-        // Also try blocking intermediates of THIS new path
-        for (const blocked2 of path.slice(1, -1)) {
-          if (Date.now() - t0 > timeLimitMs) break;
-          const path2 = bfsPath(forward, from, to, new Set([blocked, blocked2]));
-          if (path2) {
-            const key2 = path2.join('→');
-            if (!seen.has(key2)) {
-              seen.add(key2);
-              paths.push(path2);
+    const key = path.join('→');
+    if (!seen.has(key)) {
+      seen.add(key);
+      paths.push(path);
+
+      // Add this path's intermediates to the queue — they'll reveal more routes
+      for (const node of path.slice(1, -1)) {
+        if (!triedNodes.has(node)) queue.push(node);
+      }
+    }
+
+    // Also try blocking pairs: this node + each intermediate from found paths
+    for (const path2Source of [shortestPath, ...paths.slice(-3)]) {
+      if (Date.now() - t0 > timeLimitMs) break;
+      for (const blocked2 of path2Source.slice(1, -1)) {
+        if (blocked2 === blocked) continue;
+        if (Date.now() - t0 > timeLimitMs) break;
+
+        const path2 = bfsPath(forward, from, to, new Set([blocked, blocked2]));
+        if (path2) {
+          const key2 = path2.join('→');
+          if (!seen.has(key2)) {
+            seen.add(key2);
+            paths.push(path2);
+            for (const node of path2.slice(1, -1)) {
+              if (!triedNodes.has(node)) queue.push(node);
             }
           }
         }
@@ -840,10 +862,10 @@ export function findAllPaths(
   }
 
   // 2. Diverse paths (block each intermediate node to find different routes)
-  const diversePaths = findDiversePaths(forward, from, to, shortest, 2000);
+  const diversePaths = findDiversePaths(forward, from, to, shortest, 3000);
 
   // 3. K-shortest paths (variations of shortest route)
-  const yenPaths = yenKShortest(forward, from, to, 15, 1000);
+  const yenPaths = yenKShortest(forward, from, to, 20, 2000);
 
   // Merge all: diverse paths first (most different), then Yen's (variations)
   const allPathKeys = new Set<string>();
