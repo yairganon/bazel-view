@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import type { ParsedGraph, AnalysisResult, NodeMetrics, GraphEdge, RemovalImpact } from '../graph';
+import type { ParsedGraph, AnalysisResult, NodeMetrics, GraphEdge, RemovalImpact, PathInfo, PathDagNode } from '../graph';
 import { findAllPaths, computeRemovalImpacts } from '../graph';
 import Autocomplete from './Autocomplete';
 
@@ -410,128 +410,13 @@ export default function Sidebar({ graph, analysis, selectedNode, onSelectNode, o
             </Section>
 
             {pathResult && (
-              <>
-                {/* Verdict */}
-                {!pathResult.reachable ? (
-                  <div className="bg-gray-900 rounded-lg p-4 text-center">
-                    <div className="text-2xl mb-2">⊘</div>
-                    <div className="text-sm text-gray-400">No connection exists between these nodes.</div>
-                  </div>
-                ) : (
-                  <>
-                    <div className={`rounded-lg p-3 ${
-                      pathResult.isUnique
-                        ? 'bg-green-950 border border-green-900'
-                        : 'bg-yellow-950 border border-yellow-900'
-                    }`}>
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className={`text-lg ${pathResult.isUnique ? 'text-green-400' : 'text-yellow-400'}`}>
-                          {pathResult.allPaths.length}
-                        </span>
-                        <span className={`text-sm font-medium ${pathResult.isUnique ? 'text-green-300' : 'text-yellow-300'}`}>
-                          {pathResult.allPaths.length === 1 ? 'path found' : 'paths found'}
-                        </span>
-                      </div>
-                      <div className="text-xs text-gray-400">
-                        {pathResult.isUnique
-                          ? 'Only one route — cut any intermediate node to break this dep.'
-                          : `${pathResult.independentCount} independent (node-disjoint) route${pathResult.independentCount > 1 ? 's' : ''} — need to cut all ${pathResult.independentCount} to fully remove this dep.`}
-                      </div>
-                    </div>
-
-                    {/* Route selector tabs */}
-                    {pathResult.allPaths.length > 0 && (
-                      <div>
-                        <div className="flex gap-1 mb-2 flex-wrap">
-                          {pathResult.allPaths.map((path, i) => (
-                            <button
-                              key={i}
-                              onClick={() => {
-                                setActiveRoute(i);
-                                handleHighlightPath(path);
-                              }}
-                              className={`px-2.5 py-1 text-xs rounded-md font-medium transition-colors ${
-                                activeRoute === i
-                                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/50'
-                                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
-                              }`}
-                            >
-                              Route {i + 1}
-                              <span className="ml-1 opacity-60">{path.length} hops</span>
-                            </button>
-                          ))}
-                        </div>
-
-                        {/* Active route visualization */}
-                        {pathResult.allPaths[activeRoute] && (
-                          <div className="bg-gray-900 rounded-lg overflow-hidden">
-                            {pathResult.allPaths[activeRoute].map((nodeId, j) => {
-                              const isFirst = j === 0;
-                              const isLast = j === pathResult.allPaths[activeRoute].length - 1;
-                              const metrics = analysis.nodeMetrics.get(nodeId);
-
-                              return (
-                                <div key={j}>
-                                  {/* Connector line */}
-                                  {j > 0 && (
-                                    <div className="flex items-center pl-4 py-0">
-                                      <div className="w-0.5 h-4 bg-gray-700 ml-[7px]" />
-                                    </div>
-                                  )}
-
-                                  {/* Node */}
-                                  <button
-                                    onClick={() => onSelectNode(nodeId)}
-                                    className={`w-full text-left px-3 py-2 flex items-center gap-2.5 transition-colors ${
-                                      nodeId === selectedNode
-                                        ? 'bg-yellow-900/30'
-                                        : 'hover:bg-gray-800'
-                                    }`}
-                                  >
-                                    {/* Dot */}
-                                    <div className={`w-4 h-4 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold ${
-                                      isFirst
-                                        ? 'bg-cyan-500 text-cyan-950'
-                                        : isLast
-                                          ? 'bg-purple-500 text-purple-950'
-                                          : 'bg-gray-600 text-gray-300'
-                                    }`}>
-                                      {isFirst ? 'S' : isLast ? 'T' : j}
-                                    </div>
-
-                                    {/* Label + metadata */}
-                                    <div className="flex-1 min-w-0">
-                                      <div className={`text-xs truncate ${
-                                        isFirst || isLast ? 'text-white font-medium' : 'text-gray-300'
-                                      }`}>
-                                        {shortLabel(nodeId)}
-                                      </div>
-                                      {metrics && !isFirst && !isLast && (
-                                        <div className="text-[10px] text-gray-500">
-                                          phase {metrics.buildPhase} · {metrics.inDegree} in · {metrics.outDegree} out
-                                        </div>
-                                      )}
-                                    </div>
-
-                                    {/* Tags */}
-                                    <div className="flex gap-1 shrink-0">
-                                      {isFirst && <span className="text-[9px] px-1 py-0.5 rounded bg-cyan-900 text-cyan-300">FROM</span>}
-                                      {isLast && <span className="text-[9px] px-1 py-0.5 rounded bg-purple-900 text-purple-300">TO</span>}
-                                      {metrics?.uniqueParent && !isFirst && !isLast && (
-                                        <span className="text-[9px] px-1 py-0.5 rounded bg-green-900 text-green-400">1 parent</span>
-                                      )}
-                                    </div>
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </>
+              <PathResultView
+                pathResult={pathResult}
+                analysis={analysis}
+                selectedNode={selectedNode}
+                onSelectNode={onSelectNode}
+                onHighlight={onHighlight}
+              />
             )}
 
           </div>
@@ -681,6 +566,222 @@ function DrawerAction({ onClick, children, variant }: { onClick: () => void; chi
     >
       {children}
     </button>
+  );
+}
+
+/**
+ * Renders the path DAG as a tree with branch points.
+ * Walks the DAG from `from`, showing a vertical pipeline.
+ * At branch points, shows alternatives inline.
+ */
+function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHighlight }: {
+  pathResult: PathInfo;
+  analysis: AnalysisResult;
+  selectedNode: string | null;
+  onSelectNode: (id: string | null) => void;
+  onHighlight: (nodes: Set<string>, edges: Set<string>, mode: string) => void;
+}) {
+  if (!pathResult.reachable) {
+    return (
+      <div className="bg-gray-900 rounded-lg p-4 text-center">
+        <div className="text-sm text-gray-400">No connection exists between these nodes.</div>
+      </div>
+    );
+  }
+
+  const highlightAllPaths = () => {
+    const nodes = new Set<string>();
+    const edges = new Set<string>();
+    for (const path of pathResult.allPaths) {
+      for (let i = 0; i < path.length; i++) {
+        nodes.add(path[i]);
+        if (i < path.length - 1) edges.add(`${path[i]}|||${path[i + 1]}`);
+      }
+    }
+    onHighlight(nodes, edges, 'all paths');
+  };
+
+  const highlightPath = (path: string[]) => {
+    const nodes = new Set(path);
+    const edges = new Set<string>();
+    for (let i = 0; i < path.length - 1; i++) edges.add(`${path[i]}|||${path[i + 1]}`);
+    onHighlight(nodes, edges, 'path');
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Summary card */}
+      <div className={`rounded-lg p-3 ${
+        pathResult.isUnique ? 'bg-green-950 border border-green-900' : 'bg-yellow-950 border border-yellow-900'
+      }`}>
+        <div className="flex items-baseline gap-2 mb-1">
+          <span className={`text-lg font-bold ${pathResult.isUnique ? 'text-green-400' : 'text-yellow-400'}`}>
+            {pathResult.allPaths.length}
+          </span>
+          <span className={`text-sm ${pathResult.isUnique ? 'text-green-300' : 'text-yellow-300'}`}>
+            {pathResult.allPaths.length === 1 ? 'path' : 'paths'}
+          </span>
+          {pathResult.branchPoints.length > 0 && (
+            <span className="text-xs text-gray-500">
+              {pathResult.branchPoints.length} branch point{pathResult.branchPoints.length > 1 ? 's' : ''}
+            </span>
+          )}
+        </div>
+        <div className="text-xs text-gray-400">
+          {pathResult.isUnique
+            ? 'Only one route — cut any intermediate node to break this dep.'
+            : `${pathResult.independentCount} independent route${pathResult.independentCount > 1 ? 's' : ''} — need to cut all to fully remove.`
+          }
+        </div>
+        <button
+          onClick={highlightAllPaths}
+          className="mt-2 text-[10px] text-blue-400 hover:text-blue-300"
+        >
+          Highlight all paths on graph
+        </button>
+      </div>
+
+      {/* DAG tree view */}
+      <div className="bg-gray-900 rounded-lg overflow-hidden">
+        <DagTreeNode
+          nodeId={pathResult.from}
+          target={pathResult.to}
+          dag={pathResult.pathDag}
+          analysis={analysis}
+          selectedNode={selectedNode}
+          onSelectNode={onSelectNode}
+          depth={0}
+          visited={new Set()}
+        />
+      </div>
+
+      {/* Individual routes — collapsed */}
+      {pathResult.allPaths.length > 1 && (
+        <details className="text-xs">
+          <summary className="text-gray-500 cursor-pointer hover:text-gray-300">
+            View all {pathResult.allPaths.length} individual routes
+          </summary>
+          <div className="mt-2 space-y-1">
+            {pathResult.allPaths.map((path, i) => (
+              <button
+                key={i}
+                onClick={() => highlightPath(path)}
+                className="w-full text-left px-2 py-1.5 bg-gray-800 rounded hover:bg-gray-700 text-[10px] text-gray-400"
+              >
+                <span className="text-gray-500">Route {i + 1}</span>
+                <span className="text-gray-600 ml-1">({path.length} hops)</span>
+                <span className="text-gray-600 ml-1">
+                  {path.slice(1, -1).map(n => shortLabel(n).split('/').pop()).join(' → ')}
+                </span>
+              </button>
+            ))}
+          </div>
+        </details>
+      )}
+    </div>
+  );
+}
+
+/** Recursive DAG tree renderer — shows branches inline */
+function DagTreeNode({ nodeId, target, dag, analysis, selectedNode, onSelectNode, depth, visited }: {
+  nodeId: string;
+  target: string;
+  dag: Map<string, PathDagNode>;
+  analysis: AnalysisResult;
+  selectedNode: string | null;
+  onSelectNode: (id: string | null) => void;
+  depth: number;
+  visited: Set<string>;
+}) {
+  if (visited.has(nodeId) || depth > 50) return null;
+  const newVisited = new Set(visited);
+  newVisited.add(nodeId);
+
+  const dagNode = dag.get(nodeId);
+  const metrics = analysis.nodeMetrics.get(nodeId);
+  const isFrom = depth === 0;
+  const isTo = nodeId === target;
+  const isBranch = dagNode?.isBranch ?? false;
+  const children = dagNode?.children ?? [];
+
+  return (
+    <div>
+      {/* This node */}
+      <button
+        onClick={() => onSelectNode(nodeId)}
+        className={`w-full text-left flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800 ${
+          nodeId === selectedNode ? 'bg-yellow-900/20' : ''
+        }`}
+        style={{ paddingLeft: `${12 + depth * 0}px` }}
+      >
+        {/* Vertical line + dot */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <div className={`w-3 h-3 rounded-full flex items-center justify-center text-[7px] font-bold ${
+            isFrom ? 'bg-cyan-500 text-cyan-950' :
+            isTo ? 'bg-purple-500 text-purple-950' :
+            isBranch ? 'bg-yellow-500 text-yellow-950' :
+            'bg-gray-600 text-gray-300'
+          }`}>
+            {isFrom ? 'S' : isTo ? 'T' : isBranch ? dagNode!.children.length : ''}
+          </div>
+        </div>
+
+        {/* Label */}
+        <div className="flex-1 min-w-0">
+          <div className={`text-xs truncate ${isFrom || isTo ? 'text-white font-medium' : 'text-gray-300'}`}>
+            {shortLabel(nodeId)}
+          </div>
+        </div>
+
+        {/* Tags */}
+        <div className="flex gap-1 shrink-0 text-[9px]">
+          {isFrom && <span className="px-1 py-0.5 rounded bg-cyan-900 text-cyan-300">FROM</span>}
+          {isTo && <span className="px-1 py-0.5 rounded bg-purple-900 text-purple-300">TO</span>}
+          {isBranch && !isFrom && !isTo && (
+            <span className="px-1 py-0.5 rounded bg-yellow-900 text-yellow-300">{children.length} ways</span>
+          )}
+          {dagNode && dagNode.pathCount < (dag.get(target)?.pathCount ?? dagNode.pathCount) && !isFrom && !isTo && (
+            <span className="px-1 py-0.5 rounded bg-gray-800 text-gray-500">{dagNode.pathCount} paths</span>
+          )}
+        </div>
+      </button>
+
+      {/* Connector + children */}
+      {!isTo && children.length === 1 && (
+        <div className="relative">
+          <div className="absolute left-[18px] top-0 w-0.5 h-full bg-gray-800" />
+          <DagTreeNode
+            nodeId={children[0]}
+            target={target}
+            dag={dag}
+            analysis={analysis}
+            selectedNode={selectedNode}
+            onSelectNode={onSelectNode}
+            depth={depth + 1}
+            visited={newVisited}
+          />
+        </div>
+      )}
+
+      {/* Branch: show children with indentation */}
+      {!isTo && children.length > 1 && (
+        <div className="ml-3 border-l-2 border-yellow-900/40">
+          {children.map(childId => (
+            <DagTreeNode
+              key={childId}
+              nodeId={childId}
+              target={target}
+              dag={dag}
+              analysis={analysis}
+              selectedNode={selectedNode}
+              onSelectNode={onSelectNode}
+              depth={depth + 1}
+              visited={newVisited}
+            />
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

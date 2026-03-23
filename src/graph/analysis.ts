@@ -27,13 +27,23 @@ export interface BuildPhase {
 }
 
 
+export interface PathDagNode {
+  id: string;
+  children: string[];   // next nodes in the path DAG
+  pathCount: number;     // how many paths go through this node
+  isBranch: boolean;     // has >1 child in the path DAG
+  isMerge: boolean;      // has >1 parent in the path DAG
+}
+
 export interface PathInfo {
   from: string;
   to: string;
-  shortestPath: string[];            // BFS shortest path
-  allPaths: string[][];              // K-shortest diverse paths
-  independentCount: number;          // node-disjoint count (how many cuts needed)
-  isUnique: boolean;                 // true if only 1 path exists
+  shortestPath: string[];
+  allPaths: string[][];
+  pathDag: Map<string, PathDagNode>;  // condensed view of all paths as a DAG
+  branchPoints: string[];              // nodes where paths diverge
+  independentCount: number;
+  isUnique: boolean;
   reachable: boolean;
 }
 
@@ -769,13 +779,49 @@ export function findAllPaths(
       from, to,
       shortestPath: [],
       allPaths: [],
+      pathDag: new Map(),
+      branchPoints: [],
       independentCount: 0,
       isUnique: false,
       reachable: false,
     };
   }
 
-  // 2. Node-disjoint count (for "how many cuts needed")
+  // 2. Build path DAG — union of all path edges
+  const dagChildren = new Map<string, Set<string>>();
+  const dagParents = new Map<string, Set<string>>();
+  const nodePathCount = new Map<string, number>();
+
+  for (const path of allPaths) {
+    for (let i = 0; i < path.length; i++) {
+      nodePathCount.set(path[i], (nodePathCount.get(path[i]) ?? 0) + 1);
+      if (!dagChildren.has(path[i])) dagChildren.set(path[i], new Set());
+      if (!dagParents.has(path[i])) dagParents.set(path[i], new Set());
+      if (i < path.length - 1) {
+        dagChildren.get(path[i])!.add(path[i + 1]);
+        dagParents.get(path[i + 1])!.add(path[i]);
+      }
+    }
+  }
+
+  const pathDag = new Map<string, PathDagNode>();
+  const branchPoints: string[] = [];
+  for (const [id, children] of dagChildren) {
+    const childArr = Array.from(children);
+    const parentCount = dagParents.get(id)?.size ?? 0;
+    const isBranch = childArr.length > 1;
+    const isMerge = parentCount > 1;
+    if (isBranch) branchPoints.push(id);
+    pathDag.set(id, {
+      id,
+      children: childArr,
+      pathCount: nodePathCount.get(id) ?? 0,
+      isBranch,
+      isMerge,
+    });
+  }
+
+  // 3. Node-disjoint count
   let disjointCount = 1;
   const excluded = new Set<string>();
   for (let i = 1; i < allPaths[0].length - 1; i++) excluded.add(allPaths[0][i]);
@@ -791,6 +837,8 @@ export function findAllPaths(
     to,
     shortestPath: allPaths[0],
     allPaths,
+    pathDag,
+    branchPoints,
     independentCount: disjointCount,
     isUnique: allPaths.length === 1,
     reachable: true,
