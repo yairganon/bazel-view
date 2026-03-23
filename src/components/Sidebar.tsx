@@ -569,11 +569,6 @@ function DrawerAction({ onClick, children, variant }: { onClick: () => void; chi
   );
 }
 
-/**
- * Renders the path DAG as a tree with branch points.
- * Walks the DAG from `from`, showing a vertical pipeline.
- * At branch points, shows alternatives inline.
- */
 function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHighlight }: {
   pathResult: PathInfo;
   analysis: AnalysisResult;
@@ -581,6 +576,8 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
   onSelectNode: (id: string | null) => void;
   onHighlight: (nodes: Set<string>, edges: Set<string>, mode: string) => void;
 }) {
+  const [activeRoute, setActiveRoute] = useState(0);
+
   if (!pathResult.reachable) {
     return (
       <div className="bg-gray-900 rounded-lg p-4 text-center">
@@ -608,24 +605,57 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
     onHighlight(nodes, edges, 'path');
   };
 
+  // Build the DAG level-by-level for the flat view
+  const dagLevels = useMemo(() => {
+    const dag = pathResult.pathDag;
+    if (dag.size === 0) return [];
+
+    const levels: { nodes: string[]; isGap: boolean }[] = [];
+    let current = new Set([pathResult.from]);
+    const visited = new Set<string>();
+
+    while (current.size > 0) {
+      const levelNodes = Array.from(current);
+      const isSinglePath = levelNodes.length === 1;
+      levels.push({ nodes: levelNodes, isGap: false });
+      for (const n of levelNodes) visited.add(n);
+
+      // Collect next level: all children of current nodes that haven't been visited
+      const next = new Set<string>();
+      for (const nodeId of current) {
+        const dagNode = dag.get(nodeId);
+        if (dagNode) {
+          for (const child of dagNode.children) {
+            if (!visited.has(child)) next.add(child);
+          }
+        }
+      }
+      current = next;
+    }
+
+    return levels;
+  }, [pathResult]);
+
+  const totalPaths = pathResult.allPaths.length;
+
   return (
     <div className="space-y-3">
-      {/* Summary card */}
+      {/* Summary */}
       <div className={`rounded-lg p-3 ${
         pathResult.isUnique ? 'bg-green-950 border border-green-900' : 'bg-yellow-950 border border-yellow-900'
       }`}>
-        <div className="flex items-baseline gap-2 mb-1">
-          <span className={`text-lg font-bold ${pathResult.isUnique ? 'text-green-400' : 'text-yellow-400'}`}>
-            {pathResult.allPaths.length}
-          </span>
-          <span className={`text-sm ${pathResult.isUnique ? 'text-green-300' : 'text-yellow-300'}`}>
-            {pathResult.allPaths.length === 1 ? 'path' : 'paths'}
-          </span>
-          {pathResult.branchPoints.length > 0 && (
-            <span className="text-xs text-gray-500">
-              {pathResult.branchPoints.length} branch point{pathResult.branchPoints.length > 1 ? 's' : ''}
+        <div className="flex items-center justify-between mb-1">
+          <div className="flex items-baseline gap-2">
+            <span className={`text-lg font-bold ${pathResult.isUnique ? 'text-green-400' : 'text-yellow-400'}`}>
+              {totalPaths}
             </span>
-          )}
+            <span className={`text-sm ${pathResult.isUnique ? 'text-green-300' : 'text-yellow-300'}`}>
+              {totalPaths === 1 ? 'path' : 'paths'}
+            </span>
+          </div>
+          <div className="text-xs text-gray-500">
+            {pathResult.shortestPath.length} hops shortest
+          </div>
         </div>
         <div className="text-xs text-gray-400">
           {pathResult.isUnique
@@ -633,153 +663,134 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
             : `${pathResult.independentCount} independent route${pathResult.independentCount > 1 ? 's' : ''} — need to cut all to fully remove.`
           }
         </div>
+        {pathResult.branchPoints.length > 0 && (
+          <div className="text-xs text-gray-500 mt-1">
+            {pathResult.branchPoints.length} branch point{pathResult.branchPoints.length > 1 ? 's' : ''} where paths diverge
+          </div>
+        )}
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-1.5">
+        <button onClick={highlightAllPaths} className="flex-1 px-2 py-1.5 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600">
+          Highlight all paths
+        </button>
         <button
-          onClick={highlightAllPaths}
-          className="mt-2 text-[10px] text-blue-400 hover:text-blue-300"
+          onClick={() => highlightPath(pathResult.shortestPath)}
+          className="flex-1 px-2 py-1.5 text-xs bg-blue-800 text-blue-200 rounded hover:bg-blue-700"
         >
-          Highlight all paths on graph
+          Highlight shortest
         </button>
       </div>
 
-      {/* DAG tree view */}
+      {/* DAG flow view — level by level */}
       <div className="bg-gray-900 rounded-lg overflow-hidden">
-        <DagTreeNode
-          nodeId={pathResult.from}
-          target={pathResult.to}
-          dag={pathResult.pathDag}
-          analysis={analysis}
-          selectedNode={selectedNode}
-          onSelectNode={onSelectNode}
-          depth={0}
-          visited={new Set()}
-        />
+        {dagLevels.map((level, li) => {
+          const isFirst = li === 0;
+          const isLast = li === dagLevels.length - 1;
+
+          return (
+            <div key={li}>
+              {/* Connector between levels */}
+              {li > 0 && (
+                <div className="flex justify-center py-0.5">
+                  <div className="w-0.5 h-3 bg-gray-700" />
+                </div>
+              )}
+
+              {/* Single node — clean row */}
+              {level.nodes.length === 1 && (
+                <button
+                  onClick={() => onSelectNode(level.nodes[0])}
+                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-gray-800 ${
+                    level.nodes[0] === selectedNode ? 'bg-yellow-900/20' : ''
+                  }`}
+                >
+                  <div className={`w-3.5 h-3.5 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold ${
+                    isFirst ? 'bg-cyan-500 text-cyan-950' :
+                    isLast ? 'bg-purple-500 text-purple-950' :
+                    'bg-gray-600 text-gray-300'
+                  }`}>
+                    {isFirst ? 'S' : isLast ? 'T' : ''}
+                  </div>
+                  <span className={`text-xs truncate flex-1 ${isFirst || isLast ? 'text-white font-medium' : 'text-gray-300'}`}>
+                    {shortLabel(level.nodes[0])}
+                  </span>
+                  {isFirst && <span className="text-[9px] px-1 py-0.5 rounded bg-cyan-900 text-cyan-300 shrink-0">FROM</span>}
+                  {isLast && <span className="text-[9px] px-1 py-0.5 rounded bg-purple-900 text-purple-300 shrink-0">TO</span>}
+                  {(() => {
+                    const dn = pathResult.pathDag.get(level.nodes[0]);
+                    return dn && dn.pathCount < totalPaths && !isFirst && !isLast ? (
+                      <span className="text-[9px] text-gray-600 shrink-0">{dn.pathCount}/{totalPaths}</span>
+                    ) : null;
+                  })()}
+                </button>
+              )}
+
+              {/* Multiple nodes — branch point */}
+              {level.nodes.length > 1 && (
+                <div className="border-l-2 border-yellow-800/50 ml-4">
+                  <div className="flex items-center gap-1.5 px-3 py-1 -ml-[9px]">
+                    <div className="w-3.5 h-3.5 rounded-full bg-yellow-500 text-yellow-950 flex items-center justify-center text-[8px] font-bold shrink-0">
+                      {level.nodes.length}
+                    </div>
+                    <span className="text-[10px] text-yellow-400">{level.nodes.length} alternatives</span>
+                  </div>
+                  {level.nodes.map(nodeId => {
+                    const dn = pathResult.pathDag.get(nodeId);
+                    return (
+                      <button
+                        key={nodeId}
+                        onClick={() => onSelectNode(nodeId)}
+                        className={`w-full text-left pl-5 pr-3 py-1 flex items-center gap-2 hover:bg-gray-800 text-xs ${
+                          nodeId === selectedNode ? 'bg-yellow-900/20' : ''
+                        }`}
+                      >
+                        <span className="w-1.5 h-1.5 rounded-full bg-yellow-600 shrink-0" />
+                        <span className="text-gray-300 truncate flex-1">{shortLabel(nodeId)}</span>
+                        {dn && <span className="text-[9px] text-gray-600 shrink-0">{dn.pathCount}/{totalPaths}</span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Individual routes — collapsed */}
-      {pathResult.allPaths.length > 1 && (
+      {totalPaths > 1 && (
         <details className="text-xs">
           <summary className="text-gray-500 cursor-pointer hover:text-gray-300">
-            View all {pathResult.allPaths.length} individual routes
+            Browse {totalPaths} individual routes
           </summary>
-          <div className="mt-2 space-y-1">
+          <div className="mt-2 flex gap-1 mb-2 flex-wrap">
             {pathResult.allPaths.map((path, i) => (
               <button
                 key={i}
-                onClick={() => highlightPath(path)}
-                className="w-full text-left px-2 py-1.5 bg-gray-800 rounded hover:bg-gray-700 text-[10px] text-gray-400"
+                onClick={() => { setActiveRoute(i); highlightPath(path); }}
+                className={`px-2 py-1 text-[10px] rounded ${
+                  activeRoute === i ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-500 hover:bg-gray-700'
+                }`}
               >
-                <span className="text-gray-500">Route {i + 1}</span>
-                <span className="text-gray-600 ml-1">({path.length} hops)</span>
-                <span className="text-gray-600 ml-1">
-                  {path.slice(1, -1).map(n => shortLabel(n).split('/').pop()).join(' → ')}
-                </span>
+                {i + 1}
               </button>
             ))}
           </div>
+          {pathResult.allPaths[activeRoute] && (
+            <div className="bg-gray-800 rounded p-2 space-y-0.5">
+              {pathResult.allPaths[activeRoute].map((nodeId, j) => (
+                <div key={j} className="flex items-center text-[10px] text-gray-400">
+                  {j > 0 && <span className="text-gray-600 mr-1">→</span>}
+                  <button onClick={() => onSelectNode(nodeId)} className="text-blue-400 hover:text-blue-300 truncate">
+                    {shortLabel(nodeId)}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </details>
-      )}
-    </div>
-  );
-}
-
-/** Recursive DAG tree renderer — shows branches inline */
-function DagTreeNode({ nodeId, target, dag, analysis, selectedNode, onSelectNode, depth, visited }: {
-  nodeId: string;
-  target: string;
-  dag: Map<string, PathDagNode>;
-  analysis: AnalysisResult;
-  selectedNode: string | null;
-  onSelectNode: (id: string | null) => void;
-  depth: number;
-  visited: Set<string>;
-}) {
-  if (visited.has(nodeId) || depth > 50) return null;
-  const newVisited = new Set(visited);
-  newVisited.add(nodeId);
-
-  const dagNode = dag.get(nodeId);
-  const metrics = analysis.nodeMetrics.get(nodeId);
-  const isFrom = depth === 0;
-  const isTo = nodeId === target;
-  const isBranch = dagNode?.isBranch ?? false;
-  const children = dagNode?.children ?? [];
-
-  return (
-    <div>
-      {/* This node */}
-      <button
-        onClick={() => onSelectNode(nodeId)}
-        className={`w-full text-left flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800 ${
-          nodeId === selectedNode ? 'bg-yellow-900/20' : ''
-        }`}
-        style={{ paddingLeft: `${12 + depth * 0}px` }}
-      >
-        {/* Vertical line + dot */}
-        <div className="flex items-center gap-1.5 shrink-0">
-          <div className={`w-3 h-3 rounded-full flex items-center justify-center text-[7px] font-bold ${
-            isFrom ? 'bg-cyan-500 text-cyan-950' :
-            isTo ? 'bg-purple-500 text-purple-950' :
-            isBranch ? 'bg-yellow-500 text-yellow-950' :
-            'bg-gray-600 text-gray-300'
-          }`}>
-            {isFrom ? 'S' : isTo ? 'T' : isBranch ? dagNode!.children.length : ''}
-          </div>
-        </div>
-
-        {/* Label */}
-        <div className="flex-1 min-w-0">
-          <div className={`text-xs truncate ${isFrom || isTo ? 'text-white font-medium' : 'text-gray-300'}`}>
-            {shortLabel(nodeId)}
-          </div>
-        </div>
-
-        {/* Tags */}
-        <div className="flex gap-1 shrink-0 text-[9px]">
-          {isFrom && <span className="px-1 py-0.5 rounded bg-cyan-900 text-cyan-300">FROM</span>}
-          {isTo && <span className="px-1 py-0.5 rounded bg-purple-900 text-purple-300">TO</span>}
-          {isBranch && !isFrom && !isTo && (
-            <span className="px-1 py-0.5 rounded bg-yellow-900 text-yellow-300">{children.length} ways</span>
-          )}
-          {dagNode && dagNode.pathCount < (dag.get(target)?.pathCount ?? dagNode.pathCount) && !isFrom && !isTo && (
-            <span className="px-1 py-0.5 rounded bg-gray-800 text-gray-500">{dagNode.pathCount} paths</span>
-          )}
-        </div>
-      </button>
-
-      {/* Connector + children */}
-      {!isTo && children.length === 1 && (
-        <div className="relative">
-          <div className="absolute left-[18px] top-0 w-0.5 h-full bg-gray-800" />
-          <DagTreeNode
-            nodeId={children[0]}
-            target={target}
-            dag={dag}
-            analysis={analysis}
-            selectedNode={selectedNode}
-            onSelectNode={onSelectNode}
-            depth={depth + 1}
-            visited={newVisited}
-          />
-        </div>
-      )}
-
-      {/* Branch: show children with indentation */}
-      {!isTo && children.length > 1 && (
-        <div className="ml-3 border-l-2 border-yellow-900/40">
-          {children.map(childId => (
-            <DagTreeNode
-              key={childId}
-              nodeId={childId}
-              target={target}
-              dag={dag}
-              analysis={analysis}
-              selectedNode={selectedNode}
-              onSelectNode={onSelectNode}
-              depth={depth + 1}
-              visited={newVisited}
-            />
-          ))}
-        </div>
       )}
     </div>
   );
