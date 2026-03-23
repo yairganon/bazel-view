@@ -575,7 +575,7 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
   onSelectNode: (id: string | null) => void;
   onHighlight: (nodes: Set<string>, edges: Set<string>, mode: string) => void;
 }) {
-  const [activeRoute, setActiveRoute] = useState(0);
+  const [expandedRoute, setExpandedRoute] = useState<number | null>(0);
 
   if (!pathResult.reachable) {
     return (
@@ -585,18 +585,6 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
     );
   }
 
-  const highlightAllPaths = () => {
-    const nodes = new Set<string>();
-    const edges = new Set<string>();
-    for (const path of pathResult.allPaths) {
-      for (let i = 0; i < path.length; i++) {
-        nodes.add(path[i]);
-        if (i < path.length - 1) edges.add(`${path[i]}|||${path[i + 1]}`);
-      }
-    }
-    onHighlight(nodes, edges, 'all paths');
-  };
-
   const highlightPath = (path: string[]) => {
     const nodes = new Set(path);
     const edges = new Set<string>();
@@ -604,38 +592,17 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
     onHighlight(nodes, edges, 'path');
   };
 
-  // Build the DAG level-by-level for the flat view
-  const dagLevels = useMemo(() => {
-    const dag = pathResult.pathDag;
-    if (dag.size === 0) return [];
-
-    const levels: { nodes: string[] }[] = [];
-    let current = new Set([pathResult.from]);
-    const visited = new Set<string>();
-
-    // BFS level-by-level with safety limit to prevent infinite loops
-    let safety = 0;
-    while (current.size > 0 && safety++ < 200) {
-      const levelNodes = Array.from(current);
-      levels.push({ nodes: levelNodes });
-      for (const n of levelNodes) visited.add(n);
-
-      const next = new Set<string>();
-      for (const nodeId of current) {
-        const dagNode = dag.get(nodeId);
-        if (dagNode) {
-          for (const child of dagNode.children) {
-            if (!visited.has(child)) next.add(child);
-          }
-        }
-      }
-      current = next;
-    }
-
-    return levels;
-  }, [pathResult]);
+  // Compute what's unique/shared per node across all paths
+  const shortestSet = useMemo(() => new Set(pathResult.shortestPath), [pathResult]);
 
   const totalPaths = pathResult.allPaths.length;
+
+  // Shorten a node to just the last meaningful segment
+  const tag = (id: string) => {
+    const parts = shortLabel(id).split('/');
+    const last = parts[parts.length - 1];
+    return last.includes(':') ? last.split(':').pop()! : last;
+  };
 
   return (
     <div className="space-y-3">
@@ -649,106 +616,106 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
               {totalPaths}
             </span>
             <span className={`text-sm ${pathResult.isUnique ? 'text-green-300' : 'text-yellow-300'}`}>
-              {totalPaths === 1 ? 'path' : 'paths'}
+              {totalPaths === 1 ? 'route' : 'routes'}
             </span>
           </div>
           <div className="text-xs text-gray-500">
-            {pathResult.shortestPath.length} hops shortest
+            {pathResult.independentCount} independent
           </div>
         </div>
         <div className="text-xs text-gray-400">
           {pathResult.isUnique
             ? 'Only one route — cut any intermediate node to break this dep.'
-            : `${pathResult.independentCount} independent route${pathResult.independentCount > 1 ? 's' : ''} — need to cut all to fully remove.`
-          }
+            : `Need to cut all ${pathResult.independentCount} independent routes to fully remove.`}
         </div>
-        {pathResult.branchPoints.length > 0 && (
-          <div className="text-xs text-gray-500 mt-1">
-            {pathResult.branchPoints.length} branch point{pathResult.branchPoints.length > 1 ? 's' : ''} where paths diverge
-          </div>
-        )}
       </div>
 
-      {/* Actions */}
-      <div className="flex gap-1.5">
-        <button onClick={highlightAllPaths} className="flex-1 px-2 py-1.5 text-xs bg-gray-700 text-gray-300 rounded hover:bg-gray-600">
-          Highlight all paths
-        </button>
-        <button
-          onClick={() => highlightPath(pathResult.shortestPath)}
-          className="flex-1 px-2 py-1.5 text-xs bg-blue-800 text-blue-200 rounded hover:bg-blue-700"
-        >
-          Highlight shortest
-        </button>
-      </div>
-
-      {/* DAG flow view — level by level */}
-      <div className="bg-gray-900 rounded-lg overflow-hidden">
-        {dagLevels.map((level, li) => {
-          const isFirst = li === 0;
-          const isLast = li === dagLevels.length - 1;
+      {/* Route list — each route is a card */}
+      <div className="space-y-1.5">
+        {pathResult.allPaths.map((path, i) => {
+          const isExpanded = expandedRoute === i;
+          const isShortest = i === 0;
+          // Nodes in this path that are NOT in the shortest path
+          const uniqueNodes = path.filter(n => !shortestSet.has(n));
+          const hops = path.length - 1;
 
           return (
-            <div key={li}>
-              {/* Connector between levels */}
-              {li > 0 && (
-                <div className="flex justify-center py-0.5">
-                  <div className="w-0.5 h-3 bg-gray-700" />
+            <div key={i} className="bg-gray-900 rounded-lg overflow-hidden">
+              {/* Route header — always visible */}
+              <button
+                onClick={() => {
+                  setExpandedRoute(isExpanded ? null : i);
+                  highlightPath(path);
+                }}
+                className={`w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-gray-800 ${
+                  isExpanded ? 'bg-gray-800' : ''
+                }`}
+              >
+                <span className={`text-xs font-mono w-5 shrink-0 ${
+                  isShortest ? 'text-blue-400' : 'text-gray-500'
+                }`}>
+                  {i + 1}
+                </span>
+
+                {/* Compact route preview: just the key segments */}
+                <div className="flex-1 min-w-0">
+                  <div className="text-[11px] text-gray-300 truncate">
+                    {path.slice(1, -1).map(tag).join(' → ')}
+                  </div>
                 </div>
-              )}
 
-              {/* Single node — clean row */}
-              {level.nodes.length === 1 && (
-                <button
-                  onClick={() => onSelectNode(level.nodes[0])}
-                  className={`w-full text-left px-3 py-1.5 flex items-center gap-2 hover:bg-gray-800 ${
-                    level.nodes[0] === selectedNode ? 'bg-yellow-900/20' : ''
-                  }`}
-                >
-                  <div className={`w-3.5 h-3.5 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold ${
-                    isFirst ? 'bg-cyan-500 text-cyan-950' :
-                    isLast ? 'bg-purple-500 text-purple-950' :
-                    'bg-gray-600 text-gray-300'
-                  }`}>
-                    {isFirst ? 'S' : isLast ? 'T' : ''}
-                  </div>
-                  <span className={`text-xs truncate flex-1 ${isFirst || isLast ? 'text-white font-medium' : 'text-gray-300'}`}>
-                    {shortLabel(level.nodes[0])}
-                  </span>
-                  {isFirst && <span className="text-[9px] px-1 py-0.5 rounded bg-cyan-900 text-cyan-300 shrink-0">FROM</span>}
-                  {isLast && <span className="text-[9px] px-1 py-0.5 rounded bg-purple-900 text-purple-300 shrink-0">TO</span>}
-                  {(() => {
-                    const dn = pathResult.pathDag.get(level.nodes[0]);
-                    return dn && dn.pathCount < totalPaths && !isFirst && !isLast ? (
-                      <span className="text-[9px] text-gray-600 shrink-0">{dn.pathCount}/{totalPaths}</span>
-                    ) : null;
-                  })()}
-                </button>
-              )}
+                <div className="flex items-center gap-2 shrink-0">
+                  {isShortest && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-900 text-blue-300">shortest</span>}
+                  {uniqueNodes.length > 0 && !isShortest && (
+                    <span className="text-[9px] text-yellow-500">{uniqueNodes.length} different</span>
+                  )}
+                  <span className="text-[10px] text-gray-600 font-mono">{hops}h</span>
+                </div>
+              </button>
 
-              {/* Multiple nodes — branch point */}
-              {level.nodes.length > 1 && (
-                <div className="border-l-2 border-yellow-800/50 ml-4">
-                  <div className="flex items-center gap-1.5 px-3 py-1 -ml-[9px]">
-                    <div className="w-3.5 h-3.5 rounded-full bg-yellow-500 text-yellow-950 flex items-center justify-center text-[8px] font-bold shrink-0">
-                      {level.nodes.length}
-                    </div>
-                    <span className="text-[10px] text-yellow-400">{level.nodes.length} alternatives</span>
-                  </div>
-                  {level.nodes.map(nodeId => {
-                    const dn = pathResult.pathDag.get(nodeId);
+              {/* Expanded: full path with node details */}
+              {isExpanded && (
+                <div className="border-t border-gray-800">
+                  {path.map((nodeId, j) => {
+                    const isFrom = j === 0;
+                    const isTo = j === path.length - 1;
+                    const isUnique = !isFrom && !isTo && !shortestSet.has(nodeId);
+
                     return (
-                      <button
-                        key={nodeId}
-                        onClick={() => onSelectNode(nodeId)}
-                        className={`w-full text-left pl-5 pr-3 py-1 flex items-center gap-2 hover:bg-gray-800 text-xs ${
-                          nodeId === selectedNode ? 'bg-yellow-900/20' : ''
-                        }`}
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-yellow-600 shrink-0" />
-                        <span className="text-gray-300 truncate flex-1">{shortLabel(nodeId)}</span>
-                        {dn && <span className="text-[9px] text-gray-600 shrink-0">{dn.pathCount}/{totalPaths}</span>}
-                      </button>
+                      <div key={j} className="flex items-center">
+                        {/* Left rail — vertical line with dots */}
+                        <div className="w-8 flex flex-col items-center shrink-0">
+                          {j > 0 && <div className={`w-0.5 h-2 ${isUnique ? 'bg-yellow-700' : 'bg-gray-700'}`} />}
+                          <div className={`w-2 h-2 rounded-full shrink-0 ${
+                            isFrom ? 'bg-cyan-500' :
+                            isTo ? 'bg-purple-500' :
+                            isUnique ? 'bg-yellow-500' :
+                            'bg-gray-600'
+                          }`} />
+                          {j < path.length - 1 && <div className={`w-0.5 h-2 ${isUnique ? 'bg-yellow-700' : 'bg-gray-700'}`} />}
+                        </div>
+
+                        {/* Node */}
+                        <button
+                          onClick={() => onSelectNode(nodeId)}
+                          className={`flex-1 min-w-0 py-1 pr-3 text-left hover:text-white ${
+                            nodeId === selectedNode ? 'text-yellow-400' : isUnique ? 'text-yellow-300' : 'text-gray-400'
+                          }`}
+                        >
+                          <span className={`text-[11px] truncate block ${
+                            isFrom || isTo ? 'text-white font-medium' : ''
+                          }`}>
+                            {shortLabel(nodeId)}
+                          </span>
+                        </button>
+
+                        {/* Tags */}
+                        <div className="pr-3 shrink-0">
+                          {isFrom && <span className="text-[8px] px-1 py-0.5 rounded bg-cyan-900 text-cyan-400">FROM</span>}
+                          {isTo && <span className="text-[8px] px-1 py-0.5 rounded bg-purple-900 text-purple-400">TO</span>}
+                          {isUnique && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-900 text-yellow-400">unique</span>}
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
@@ -757,40 +724,6 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
           );
         })}
       </div>
-
-      {/* Individual routes — collapsed */}
-      {totalPaths > 1 && (
-        <details className="text-xs">
-          <summary className="text-gray-500 cursor-pointer hover:text-gray-300">
-            Browse {totalPaths} individual routes
-          </summary>
-          <div className="mt-2 flex gap-1 mb-2 flex-wrap">
-            {pathResult.allPaths.map((path, i) => (
-              <button
-                key={i}
-                onClick={() => { setActiveRoute(i); highlightPath(path); }}
-                className={`px-2 py-1 text-[10px] rounded ${
-                  activeRoute === i ? 'bg-blue-600 text-white' : 'bg-gray-800 text-gray-500 hover:bg-gray-700'
-                }`}
-              >
-                {i + 1}
-              </button>
-            ))}
-          </div>
-          {pathResult.allPaths[activeRoute] && (
-            <div className="bg-gray-800 rounded p-2 space-y-0.5">
-              {pathResult.allPaths[activeRoute].map((nodeId, j) => (
-                <div key={j} className="flex items-center text-[10px] text-gray-400">
-                  {j > 0 && <span className="text-gray-600 mr-1">→</span>}
-                  <button onClick={() => onSelectNode(nodeId)} className="text-blue-400 hover:text-blue-300 truncate">
-                    {shortLabel(nodeId)}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </details>
-      )}
     </div>
   );
 }
