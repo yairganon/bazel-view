@@ -707,11 +707,13 @@ function yenKShortest(
   forward: AdjList,
   from: string,
   to: string,
-  K: number
+  K: number,
+  timeLimitMs: number = 2000
 ): string[][] {
   const A: string[][] = [];
   const B: { path: string[]; len: number }[] = [];
-  const seen = new Set<string>(); // O(1) dedup instead of O(K) linear scan
+  const seen = new Set<string>();
+  const t0 = Date.now();
 
   const first = bfsPath(forward, from, to);
   if (!first) return [];
@@ -719,12 +721,13 @@ function yenKShortest(
   seen.add(first.join('→'));
 
   for (let k = 1; k < K; k++) {
+    if (Date.now() - t0 > timeLimitMs) break; // time limit
+
     const prevPath = A[k - 1];
 
     for (let i = 0; i < prevPath.length - 1; i++) {
-      const spurNode = prevPath[i];
+      if (Date.now() - t0 > timeLimitMs) break;
 
-      // Exclude edges: compare path prefixes without join() — use direct element comparison
       const excludeEdges = new Set<string>();
       for (const p of A) {
         if (p.length <= i) continue;
@@ -737,13 +740,12 @@ function yenKShortest(
         }
       }
 
-      // Exclude nodes in root path (except spur node itself)
       const excludeNodes = new Set<string>();
       for (let j = 0; j < i; j++) {
         excludeNodes.add(prevPath[j]);
       }
 
-      const spurPath = bfsPath(forward, spurNode, to, excludeNodes, excludeEdges);
+      const spurPath = bfsPath(forward, prevPath[i], to, excludeNodes, excludeEdges);
       if (spurPath) {
         const totalPath = [...prevPath.slice(0, i), ...spurPath];
         const pathKey = totalPath.join('→');
@@ -757,8 +759,7 @@ function yenKShortest(
     if (B.length === 0) break;
 
     B.sort((a, b) => a.len - b.len);
-    const next = B.shift()!;
-    A.push(next.path);
+    A.push(B.shift()!.path);
   }
 
   return A;
@@ -779,7 +780,7 @@ export function findAllPaths(
   for (const edge of graph.edges) forward.get(edge.source)?.push(edge.target);
 
   // 1. K-shortest paths
-  const allPaths = yenKShortest(forward, from, to, 50);
+  const allPaths = yenKShortest(forward, from, to, 20, 3000);
 
   if (allPaths.length === 0) {
     return {
