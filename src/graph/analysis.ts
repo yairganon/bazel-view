@@ -766,9 +766,59 @@ function yenKShortest(
 }
 
 /**
+ * Find diverse paths by avoiding key nodes from previous paths.
+ * For each intermediate node in the shortest path, try finding a route
+ * that skips that node entirely — this discovers paths through
+ * completely different parts of the graph.
+ */
+function findDiversePaths(
+  forward: AdjList,
+  from: string,
+  to: string,
+  shortestPath: string[],
+  timeLimitMs: number
+): string[][] {
+  const paths: string[][] = [];
+  const seen = new Set<string>();
+  seen.add(shortestPath.join('→'));
+  const t0 = Date.now();
+
+  // For each intermediate node in the shortest path, block it and find an alternative
+  const intermediates = shortestPath.slice(1, -1);
+  for (const blocked of intermediates) {
+    if (Date.now() - t0 > timeLimitMs) break;
+
+    const path = bfsPath(forward, from, to, new Set([blocked]));
+    if (path) {
+      const key = path.join('→');
+      if (!seen.has(key)) {
+        seen.add(key);
+        paths.push(path);
+
+        // Also try blocking intermediates of THIS new path
+        for (const blocked2 of path.slice(1, -1)) {
+          if (Date.now() - t0 > timeLimitMs) break;
+          const path2 = bfsPath(forward, from, to, new Set([blocked, blocked2]));
+          if (path2) {
+            const key2 = path2.join('→');
+            if (!seen.has(key2)) {
+              seen.add(key2);
+              paths.push(path2);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return paths;
+}
+
+/**
  * Find paths from `from` to `to`:
  * 1. K-shortest diverse paths (Yen's algorithm)
- * 2. Node-disjoint count (how many independent routes = how many cuts needed)
+ * 2. Edge-disjoint paths (completely different routes)
+ * 3. Node-disjoint count (how many cuts needed)
  */
 export function findAllPaths(
   graph: ParsedGraph,
@@ -779,8 +829,33 @@ export function findAllPaths(
   for (const node of graph.nodes) forward.set(node.id, []);
   for (const edge of graph.edges) forward.get(edge.source)?.push(edge.target);
 
-  // 1. K-shortest paths
-  const allPaths = yenKShortest(forward, from, to, 20, 3000);
+  // 1. Shortest path
+  const shortest = bfsPath(forward, from, to);
+  if (!shortest) {
+    return {
+      from, to, shortestPath: [], allPaths: [],
+      pathDag: new Map(), branchPoints: [],
+      independentCount: 0, isUnique: false, reachable: false,
+    };
+  }
+
+  // 2. Diverse paths (block each intermediate node to find different routes)
+  const diversePaths = findDiversePaths(forward, from, to, shortest, 2000);
+
+  // 3. K-shortest paths (variations of shortest route)
+  const yenPaths = yenKShortest(forward, from, to, 15, 1000);
+
+  // Merge all: diverse paths first (most different), then Yen's (variations)
+  const allPathKeys = new Set<string>();
+  const allPaths: string[][] = [];
+
+  for (const p of [shortest, ...diversePaths, ...yenPaths]) {
+    const key = p.join('→');
+    if (!allPathKeys.has(key)) {
+      allPathKeys.add(key);
+      allPaths.push(p);
+    }
+  }
 
   if (allPaths.length === 0) {
     return {
