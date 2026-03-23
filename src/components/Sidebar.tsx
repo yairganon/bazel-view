@@ -78,14 +78,19 @@ export default function Sidebar({ graph, analysis, selectedNode, onSelectNode, o
     }
   }, [analysis, search, sortBy, filterMode]);
 
+  const [findingPaths, setFindingPaths] = useState(false);
   const handleFindPaths = () => {
     if (!pathFrom || !pathTo) return;
-    const result = findAllPaths(graph, pathFrom, pathTo);
-    setPathResult(result);
-    setActiveRoute(0);
-    if (result.shortestPath.length > 0) {
-      handleHighlightPath(result.shortestPath);
-    }
+    setFindingPaths(true);
+    setPathResult(null);
+    setTimeout(() => {
+      const result = findAllPaths(graph, pathFrom, pathTo);
+      setPathResult(result);
+      setFindingPaths(false);
+      if (result.shortestPath.length > 0) {
+        handleHighlightPath(result.shortestPath);
+      }
+    }, 50);
   };
 
   const handleHighlightPath = (path: string[]) => {
@@ -395,10 +400,10 @@ export default function Sidebar({ graph, analysis, selectedNode, onSelectNode, o
                 />
                 <button
                   onClick={handleFindPaths}
-                  disabled={!pathFrom || !pathTo}
+                  disabled={!pathFrom || !pathTo || findingPaths}
                   className="w-full px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Find all paths
+                  {findingPaths ? 'Searching...' : 'Find all paths'}
                 </button>
               </div>
             </Section>
