@@ -37,8 +37,6 @@ export const DEFAULT_EXCLUDE_PATTERNS = [
   'tools/jdk:',
   'tools/test:',
   '.sh',
-  '.java',
-  '.scala',
   '.srcjar',
   '_deploy.jar',
   '_java_runtime',
@@ -72,7 +70,20 @@ export function parseDot(dot: string, filter?: FilterOptions): ParsedGraph {
 
   const lines = normalized.split('\n');
 
+  // Source file extensions — match on the target name (after :), not the path
+  const sourceExts = ['.java', '.scala', '.py', '.go', '.rs'];
+
   function shouldExclude(id: string): boolean {
+    // Check source file targets: "//path:Foo.java" should be excluded
+    // but "//path/src/main/java/com/foo:lib" should NOT
+    const colonIdx = id.lastIndexOf(':');
+    if (colonIdx !== -1) {
+      const targetName = id.slice(colonIdx + 1);
+      for (const ext of sourceExts) {
+        if (targetName.endsWith(ext)) return true;
+      }
+    }
+
     for (const pat of excludes) {
       if (id.includes(pat)) return true;
     }
