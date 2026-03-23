@@ -26,14 +26,8 @@ export default function Sidebar({ graph, analysis, selectedNode, onSelectNode, o
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState<'inDegree' | 'outDegree' | 'transitive' | 'name'>('inDegree');
   // Default "From" to the root with most transitive deps (the main build target)
-  const mainRoot = useMemo(() => {
-    if (analysis.roots.length === 0) return '';
-    return analysis.roots.reduce((best, id) => {
-      const bestCount = analysis.nodeMetrics.get(best)?.transitiveDepCount ?? 0;
-      const count = analysis.nodeMetrics.get(id)?.transitiveDepCount ?? 0;
-      return count > bestCount ? id : best;
-    }, analysis.roots[0]);
-  }, [analysis]);
+  // roots[0] is already the one with most reachable nodes (sorted in analyzeGraph)
+  const mainRoot = analysis.roots[0] ?? '';
   const [pathFrom, setPathFrom] = useState(mainRoot);
   // Reset when graph changes
   const [prevMainRoot, setPrevMainRoot] = useState(mainRoot);

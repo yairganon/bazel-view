@@ -550,8 +550,15 @@ export function analyzeGraph(graph: ParsedGraph): AnalysisResult {
     }
   }
 
-  const roots = graph.nodes.filter(n => (reverse.get(n.id)?.length ?? 0) === 0).map(n => n.id);
+  const rootCandidates = graph.nodes.filter(n => (reverse.get(n.id)?.length ?? 0) === 0).map(n => n.id);
   const leaves = graph.nodes.filter(n => (forward.get(n.id)?.length ?? 0) === 0).map(n => n.id);
+
+  // Sort roots by BFS reachable count — the real root reaches the most nodes
+  const roots = rootCandidates.sort((a, b) => {
+    const ra = bfsFromRoots(forward, [a], null).size;
+    const rb = bfsFromRoots(forward, [b], null).size;
+    return rb - ra;
+  });
 
   const heavyNodes = Array.from(transitiveCounts.entries())
     .sort((a, b) => b[1] - a[1])
