@@ -814,9 +814,7 @@ function OverviewTab({ graph, analysis, selectedNode, onSelectNode, onHighlight,
           <div className="text-[10px] text-gray-500">edges</div>
         </div>
         <div className="bg-gray-900 rounded-lg p-3 text-center">
-          <div className="text-xl font-bold text-white">
-            {analysis.nodeMetrics.get(analysis.roots[0] ?? '')?.transitiveDepCount ?? 0}
-          </div>
+          <div className="text-xl font-bold text-white">{analysis.totalDeps}</div>
           <div className="text-[10px] text-gray-500">total deps</div>
         </div>
         <div className="bg-gray-900 rounded-lg p-3 text-center">

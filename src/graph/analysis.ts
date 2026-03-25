@@ -65,6 +65,7 @@ export interface AnalysisResult {
   roots: string[];
   leaves: string[];
   buildPhases: BuildPhase[];
+  totalDeps: number;   // BFS reachable from main root (excluding root itself)
 }
 
 type AdjList = Map<string, string[]>;
@@ -562,11 +563,12 @@ export function analyzeGraph(graph: ParsedGraph): AnalysisResult {
   const leaves = graph.nodes.filter(n => (forward.get(n.id)?.length ?? 0) === 0).map(n => n.id);
 
   // Sort roots by BFS reachable count — the real root reaches the most nodes
-  const roots = rootCandidates.sort((a, b) => {
-    const ra = bfsFromRoots(forward, [a], null).size;
-    const rb = bfsFromRoots(forward, [b], null).size;
-    return rb - ra;
-  });
+  const rootReachable = new Map<string, number>();
+  for (const r of rootCandidates) {
+    rootReachable.set(r, bfsFromRoots(forward, [r], null).size);
+  }
+  const roots = rootCandidates.sort((a, b) => (rootReachable.get(b) ?? 0) - (rootReachable.get(a) ?? 0));
+  const totalDeps = Math.max(0, graph.nodes.length - 1);
 
   const heavyNodes = Array.from(transitiveCounts.entries())
     .sort((a, b) => b[1] - a[1])
@@ -583,6 +585,7 @@ export function analyzeGraph(graph: ParsedGraph): AnalysisResult {
     roots,
     leaves,
     buildPhases,
+    totalDeps,
   };
 }
 
