@@ -804,7 +804,7 @@ function OverviewTab({ graph, analysis, selectedNode, onSelectNode, onHighlight,
   return (
     <div className="space-y-4">
       {/* Key metrics grid */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         <div className="bg-gray-900 rounded-lg p-3 text-center">
           <div className="text-xl font-bold text-white">{graph.nodes.length}</div>
           <div className="text-[10px] text-gray-500">nodes</div>
@@ -814,8 +814,14 @@ function OverviewTab({ graph, analysis, selectedNode, onSelectNode, onHighlight,
           <div className="text-[10px] text-gray-500">edges</div>
         </div>
         <div className="bg-gray-900 rounded-lg p-3 text-center">
+          <div className="text-xl font-bold text-white">
+            {analysis.nodeMetrics.get(analysis.roots[0] ?? '')?.transitiveDepCount ?? 0}
+          </div>
+          <div className="text-[10px] text-gray-500">total deps</div>
+        </div>
+        <div className="bg-gray-900 rounded-lg p-3 text-center">
           <div className="text-xl font-bold text-white">{analysis.buildPhases.length}</div>
-          <div className="text-[10px] text-gray-500">build phases</div>
+          <div className="text-[10px] text-gray-500">phases</div>
         </div>
       </div>
 
