@@ -65,7 +65,7 @@ export interface AnalysisResult {
   roots: string[];
   leaves: string[];
   buildPhases: BuildPhase[];
-  totalDeps: number;   // BFS reachable from main root (excluding root itself)
+  totalDeps: number;   // nodes in graph minus root
 }
 
 type AdjList = Map<string, string[]>;
