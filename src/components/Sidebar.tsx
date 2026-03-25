@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import type { ParsedGraph, AnalysisResult, NodeMetrics, GraphEdge, RemovalImpact, PathInfo, PathGroup } from '../graph';
 import { findAllPaths, computeRemovalImpacts } from '../graph';
 import Autocomplete from './Autocomplete';
@@ -29,27 +29,29 @@ export default function Sidebar({ graph, analysis, selectedNode, onSelectNode, o
   // roots[0] is already the one with most reachable nodes (sorted in analyzeGraph)
   const mainRoot = analysis.roots[0] ?? '';
   const [pathFrom, setPathFrom] = useState(mainRoot);
-  // Reset when graph changes
-  const [prevMainRoot, setPrevMainRoot] = useState(mainRoot);
-  if (mainRoot !== prevMainRoot) {
-    setPrevMainRoot(mainRoot);
-    setPathFrom(mainRoot);
-  }
   const [pathTo, setPathTo] = useState('');
   const [pathResult, setPathResult] = useState<ReturnType<typeof findAllPaths> | null>(null);
-  const [activeRoute, setActiveRoute] = useState<number>(0);
   const [removalResult, setRemovalResult] = useState<{
     removedId: string;
     orphaned: string[];
     affectedEdges: number;
-    depsBefore: number;         // total transitive deps of root before
-    depsAfter: number;          // total transitive deps of root after
-    savings: number;            // depsBefore - depsAfter
+    depsBefore: number;
+    depsAfter: number;
+    savings: number;
     savingsPct: number;
   } | null>(null);
   const [filterMode, setFilterMode] = useState<'all' | 'roots' | 'leaves' | 'bridges' | 'unique'>('all');
   const [impactRanking, setImpactRanking] = useState<RemovalImpact[] | null>(null);
   const [computingImpact, setComputingImpact] = useState(false);
+
+  // Reset all session state when graph changes
+  useEffect(() => {
+    setPathFrom(mainRoot);
+    setPathTo('');
+    setPathResult(null);
+    setRemovalResult(null);
+    setImpactRanking(null);
+  }, [mainRoot]);
 
   const selectedMetrics = selectedNode ? analysis.nodeMetrics.get(selectedNode) : null;
   const nodeIds = useMemo(() => graph.nodes.map(n => n.id).sort(), [graph]);

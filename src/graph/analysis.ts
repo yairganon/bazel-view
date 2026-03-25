@@ -1131,12 +1131,17 @@ export function findAllPaths(
   const forward: AdjList = new Map();
   for (const node of graph.nodes) forward.set(node.id, []);
   for (const edge of graph.edges) forward.get(edge.source)?.push(edge.target);
+  // Sort adjacency lists for deterministic BFS results across sessions
+  for (const [, children] of forward) children.sort();
 
   const empty: PathInfo = {
     from, to, shortestPath: [], essentialPaths: [], allPathCount: 0,
     dominators: [], minCutNodes: [], minCutSize: 0,
     pathGroups: [], isUnique: false, reachable: false,
   };
+
+  // Validate nodes exist
+  if (!forward.has(from) || !forward.has(to)) return empty;
 
   // 1. Shortest path
   const shortest = bfsPath(forward, from, to);
