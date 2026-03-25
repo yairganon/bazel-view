@@ -35,14 +35,22 @@ export interface PathDagNode {
   isMerge: boolean;      // has >1 parent in the path DAG
 }
 
+export interface PathGroup {
+  viaNode: string;          // the node this group diverges through
+  paths: string[][];        // all paths in this group
+  representative: string[]; // shortest path as representative
+}
+
 export interface PathInfo {
   from: string;
   to: string;
   shortestPath: string[];
-  allPaths: string[][];
-  pathDag: Map<string, PathDagNode>;  // condensed view of all paths as a DAG
-  branchPoints: string[];              // nodes where paths diverge
-  independentCount: number;
+  essentialPaths: string[][];         // after suffix dedup — no redundant extensions
+  allPathCount: number;               // total before dedup
+  dominators: string[];               // nodes on ALL paths (cut any one = done)
+  minCutNodes: string[];              // exact min set of nodes to cut
+  minCutSize: number;
+  pathGroups: PathGroup[];            // essential paths grouped by first divergence
   isUnique: boolean;
   reachable: boolean;
 }
@@ -655,6 +663,277 @@ function bfsFromRoots(forward: AdjList, roots: string[], excludeNode: string | n
 /**
  * BFS shortest path, optionally excluding nodes and/or edges.
  */
+/**
+ * Suffix deduplication: remove paths that are extensions of shorter paths.
+ * If path B ends with the entirety of path A, B is redundant.
+ * e.g. [k,t,a,b,c,e] is redundant when [a,b,c,e] exists.
+ */
+function deduplicatePaths(paths: string[][]): string[][] {
+  if (paths.length <= 1) return paths;
+
+  // Reverse paths and sort lexicographically — suffix-subsumed paths become prefix-subsumed
+  const reversed = paths.map((p, i) => ({ rev: [...p].reverse(), idx: i }));
+  reversed.sort((a, b) => {
+    const len = Math.min(a.rev.length, b.rev.length);
+    for (let i = 0; i < len; i++) {
+      if (a.rev[i] < b.rev[i]) return -1;
+      if (a.rev[i] > b.rev[i]) return 1;
+    }
+    return a.rev.length - b.rev.length; // shorter first
+  });
+
+  const keep = new Set<number>();
+  for (let i = 0; i < reversed.length; i++) {
+    // Check if this reversed path is a prefix of the next one (meaning next is a suffix extension)
+    let subsumed = false;
+    // Check against all previous kept paths
+    for (const ki of keep) {
+      const kept = reversed.find(r => r.idx === ki)!;
+      if (kept.rev.length <= reversed[i].rev.length) {
+        let isPrefix = true;
+        for (let j = 0; j < kept.rev.length; j++) {
+          if (kept.rev[j] !== reversed[i].rev[j]) { isPrefix = false; break; }
+        }
+        if (isPrefix && kept.rev.length < reversed[i].rev.length) {
+          subsumed = true;
+          break;
+        }
+      }
+    }
+    if (!subsumed) keep.add(reversed[i].idx);
+  }
+
+  return paths.filter((_, i) => keep.has(i));
+}
+
+/**
+ * Find dominator nodes: nodes that appear on EVERY path from `from` to `to`.
+ * Cutting any single dominator breaks all paths.
+ * O(P * L) where P = paths, L = max length.
+ */
+function findDominatorNodes(paths: string[][], from: string, to: string): string[] {
+  if (paths.length === 0) return [];
+
+  // Start with all intermediate nodes from first path
+  let candidates = new Set(paths[0].slice(1, -1));
+
+  // Intersect with each subsequent path
+  for (let i = 1; i < paths.length; i++) {
+    const pathNodes = new Set(paths[i].slice(1, -1));
+    for (const node of candidates) {
+      if (!pathNodes.has(node)) candidates.delete(node);
+    }
+    if (candidates.size === 0) break;
+  }
+
+  // Sort by position in shortest path (first path)
+  const order = new Map(paths[0].map((n, i) => [n, i]));
+  return Array.from(candidates).sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0));
+}
+
+/**
+ * Exact min vertex cut via max-flow on node-split graph.
+ * Uses Edmonds-Karp (BFS-based Ford-Fulkerson).
+ * Returns the minimum set of intermediate nodes to remove to disconnect from→to.
+ */
+function computeMinVertexCut(
+  forward: AdjList,
+  from: string,
+  to: string
+): { cutSize: number; cutNodes: string[] } {
+  // Build the subgraph of nodes reachable from `from` that can reach `to`
+  // Forward reachable from `from`
+  const fwdReach = new Set<string>();
+  let q: string[] = [from]; let h = 0;
+  fwdReach.add(from);
+  while (h < q.length) {
+    const cur = q[h++];
+    for (const child of forward.get(cur) ?? []) {
+      if (!fwdReach.has(child)) { fwdReach.add(child); q.push(child); }
+    }
+  }
+
+  if (!fwdReach.has(to)) return { cutSize: 0, cutNodes: [] };
+
+  // Backward reachable from `to`
+  const reverse = new Map<string, string[]>();
+  for (const [src, tgts] of forward) {
+    for (const t of tgts) {
+      if (!reverse.has(t)) reverse.set(t, []);
+      reverse.get(t)!.push(src);
+    }
+  }
+  const bwdReach = new Set<string>();
+  q = [to]; h = 0;
+  bwdReach.add(to);
+  while (h < q.length) {
+    const cur = q[h++];
+    for (const parent of reverse.get(cur) ?? []) {
+      if (!bwdReach.has(parent)) { bwdReach.add(parent); q.push(parent); }
+    }
+  }
+
+  // Relevant nodes: on some path from→to
+  const relevant = new Set<string>();
+  for (const n of fwdReach) { if (bwdReach.has(n)) relevant.add(n); }
+
+  // Node splitting: each node v becomes v_in and v_out
+  // Edge v_in → v_out with capacity 1 (except from/to which get infinity)
+  // Original edges: u_out → v_in with capacity infinity
+  type FlowNode = string;
+  const nodeIn = (n: string): FlowNode => n + '<<in';
+  const nodeOut = (n: string): FlowNode => n + '<<out';
+
+  const cap = new Map<string, number>(); // edge key → capacity
+  const flowAdj = new Map<FlowNode, FlowNode[]>();
+  const INF = relevant.size + 1;
+
+  const ensureAdj = (n: FlowNode) => { if (!flowAdj.has(n)) flowAdj.set(n, []); };
+
+  for (const n of relevant) {
+    const ni = nodeIn(n), no = nodeOut(n);
+    ensureAdj(ni); ensureAdj(no);
+    // Internal edge: capacity 1 for intermediates, INF for from/to
+    const c = (n === from || n === to) ? INF : 1;
+    const ek = `${ni}|||${no}`;
+    cap.set(ek, c);
+    flowAdj.get(ni)!.push(no);
+    // Reverse edge for residual graph
+    const rek = `${no}|||${ni}`;
+    cap.set(rek, 0);
+    flowAdj.get(no)!.push(ni);
+  }
+
+  for (const n of relevant) {
+    for (const child of forward.get(n) ?? []) {
+      if (!relevant.has(child)) continue;
+      const no = nodeOut(n), ci = nodeIn(child);
+      ensureAdj(no); ensureAdj(ci);
+      const ek = `${no}|||${ci}`;
+      cap.set(ek, INF);
+      flowAdj.get(no)!.push(ci);
+      const rek = `${ci}|||${no}`;
+      if (!cap.has(rek)) {
+        cap.set(rek, 0);
+        flowAdj.get(ci)!.push(no);
+      }
+    }
+  }
+
+  // Edmonds-Karp: BFS to find augmenting paths
+  const source = nodeOut(from);
+  const sink = nodeIn(to);
+  let totalFlow = 0;
+
+  while (totalFlow < INF) {
+    // BFS for augmenting path
+    const parent = new Map<FlowNode, FlowNode>();
+    const visited = new Set<FlowNode>([source]);
+    const bfsQ: FlowNode[] = [source];
+    let bh = 0;
+    let found = false;
+
+    while (bh < bfsQ.length) {
+      const cur = bfsQ[bh++];
+      for (const next of flowAdj.get(cur) ?? []) {
+        const ek = `${cur}|||${next}`;
+        if (!visited.has(next) && (cap.get(ek) ?? 0) > 0) {
+          visited.add(next);
+          parent.set(next, cur);
+          if (next === sink) { found = true; break; }
+          bfsQ.push(next);
+        }
+      }
+      if (found) break;
+    }
+
+    if (!found) break;
+
+    // Find bottleneck
+    let bottleneck = INF;
+    let cur: FlowNode = sink;
+    while (cur !== source) {
+      const prev = parent.get(cur)!;
+      const ek = `${prev}|||${cur}`;
+      bottleneck = Math.min(bottleneck, cap.get(ek) ?? 0);
+      cur = prev;
+    }
+
+    // Update residual
+    cur = sink;
+    while (cur !== source) {
+      const prev = parent.get(cur)!;
+      const ek = `${prev}|||${cur}`;
+      const rek = `${cur}|||${prev}`;
+      cap.set(ek, (cap.get(ek) ?? 0) - bottleneck);
+      cap.set(rek, (cap.get(rek) ?? 0) + bottleneck);
+      cur = prev;
+    }
+
+    totalFlow += bottleneck;
+  }
+
+  // Find min-cut nodes: nodes whose internal edge (in→out) is saturated
+  // and in_node is reachable from source in residual, but out_node is not
+  const residualReach = new Set<FlowNode>([source]);
+  q = [source]; h = 0;
+  while (h < q.length) {
+    const cur = q[h++];
+    for (const next of flowAdj.get(cur) ?? []) {
+      const ek = `${cur}|||${next}`;
+      if (!residualReach.has(next) && (cap.get(ek) ?? 0) > 0) {
+        residualReach.add(next);
+        q.push(next);
+      }
+    }
+  }
+
+  const cutNodes: string[] = [];
+  for (const n of relevant) {
+    if (n === from || n === to) continue;
+    const ni = nodeIn(n), no = nodeOut(n);
+    if (residualReach.has(ni) && !residualReach.has(no)) {
+      cutNodes.push(n);
+    }
+  }
+
+  return { cutSize: totalFlow, cutNodes };
+}
+
+/**
+ * Group paths by first divergence from shortest path.
+ */
+function groupPathsByDivergence(paths: string[][], shortest: string[]): PathGroup[] {
+  if (paths.length <= 1) {
+    return paths.length === 1 ? [{ viaNode: paths[0][1] ?? paths[0][0], paths, representative: paths[0] }] : [];
+  }
+
+  // For each path, find where it first diverges from the shortest
+  const groups = new Map<string, string[][]>();
+  const shortestNodes = new Map(shortest.map((n, i) => [n, i]));
+
+  for (const path of paths) {
+    let divergeNode = path[1] ?? path[0]; // default: second node
+    for (let i = 1; i < path.length - 1; i++) {
+      if (!shortestNodes.has(path[i])) {
+        divergeNode = path[i];
+        break;
+      }
+    }
+    const arr = groups.get(divergeNode) ?? [];
+    arr.push(path);
+    groups.set(divergeNode, arr);
+  }
+
+  return Array.from(groups.entries())
+    .map(([viaNode, paths]) => ({
+      viaNode,
+      paths,
+      representative: paths.reduce((a, b) => a.length <= b.length ? a : b, paths[0]),
+    }))
+    .sort((a, b) => a.representative.length - b.representative.length);
+}
+
 function bfsPath(
   forward: AdjList,
   from: string,
@@ -837,10 +1116,12 @@ function findDiversePaths(
 }
 
 /**
- * Find paths from `from` to `to`:
- * 1. K-shortest diverse paths (Yen's algorithm)
- * 2. Edge-disjoint paths (completely different routes)
- * 3. Node-disjoint count (how many cuts needed)
+ * Find paths from `from` to `to` with full analysis:
+ * 1. Discover paths (diverse + Yen's K-shortest)
+ * 2. Suffix deduplication (remove redundant extensions)
+ * 3. Dominator analysis (nodes on ALL paths)
+ * 4. Min vertex cut (exact minimum nodes to remove)
+ * 5. Group by first divergence point
  */
 export function findAllPaths(
   graph: ParsedGraph,
@@ -851,103 +1132,56 @@ export function findAllPaths(
   for (const node of graph.nodes) forward.set(node.id, []);
   for (const edge of graph.edges) forward.get(edge.source)?.push(edge.target);
 
+  const empty: PathInfo = {
+    from, to, shortestPath: [], essentialPaths: [], allPathCount: 0,
+    dominators: [], minCutNodes: [], minCutSize: 0,
+    pathGroups: [], isUnique: false, reachable: false,
+  };
+
   // 1. Shortest path
   const shortest = bfsPath(forward, from, to);
-  if (!shortest) {
-    return {
-      from, to, shortestPath: [], allPaths: [],
-      pathDag: new Map(), branchPoints: [],
-      independentCount: 0, isUnique: false, reachable: false,
-    };
-  }
+  if (!shortest) return empty;
 
-  // 2. Diverse paths (block each intermediate node to find different routes)
+  // 2. Discover diverse paths + Yen's variations
   const diversePaths = findDiversePaths(forward, from, to, shortest, 8000);
-
-  // 3. K-shortest paths (variations of shortest route)
   const yenPaths = yenKShortest(forward, from, to, 30, 4000);
 
-  // Merge all: diverse paths first (most different), then Yen's (variations)
+  // Merge and dedup
   const allPathKeys = new Set<string>();
-  const allPaths: string[][] = [];
-
+  const rawPaths: string[][] = [];
   for (const p of [shortest, ...diversePaths, ...yenPaths]) {
     const key = p.join('→');
     if (!allPathKeys.has(key)) {
       allPathKeys.add(key);
-      allPaths.push(p);
+      rawPaths.push(p);
     }
   }
 
-  if (allPaths.length === 0) {
-    return {
-      from, to,
-      shortestPath: [],
-      allPaths: [],
-      pathDag: new Map(),
-      branchPoints: [],
-      independentCount: 0,
-      isUnique: false,
-      reachable: false,
-    };
-  }
+  const allPathCount = rawPaths.length;
 
-  // 2. Build path DAG — union of all path edges
-  const dagChildren = new Map<string, Set<string>>();
-  const dagParents = new Map<string, Set<string>>();
-  const nodePathCount = new Map<string, number>();
+  // 3. Suffix deduplication
+  const essentialPaths = deduplicatePaths(rawPaths);
 
-  for (const path of allPaths) {
-    // First pass: ensure all nodes have entries in maps
-    for (const nodeId of path) {
-      if (!dagChildren.has(nodeId)) dagChildren.set(nodeId, new Set());
-      if (!dagParents.has(nodeId)) dagParents.set(nodeId, new Set());
-      nodePathCount.set(nodeId, (nodePathCount.get(nodeId) ?? 0) + 1);
-    }
-    // Second pass: add edges
-    for (let i = 0; i < path.length - 1; i++) {
-      dagChildren.get(path[i])!.add(path[i + 1]);
-      dagParents.get(path[i + 1])!.add(path[i]);
-    }
-  }
+  // 4. Dominator analysis — nodes on ALL essential paths
+  const dominators = findDominatorNodes(essentialPaths, from, to);
 
-  const pathDag = new Map<string, PathDagNode>();
-  const branchPoints: string[] = [];
-  for (const [id, children] of dagChildren) {
-    const childArr = Array.from(children);
-    const parentCount = dagParents.get(id)?.size ?? 0;
-    const isBranch = childArr.length > 1;
-    const isMerge = parentCount > 1;
-    if (isBranch) branchPoints.push(id);
-    pathDag.set(id, {
-      id,
-      children: childArr,
-      pathCount: nodePathCount.get(id) ?? 0,
-      isBranch,
-      isMerge,
-    });
-  }
+  // 5. Exact min vertex cut
+  const { cutSize: minCutSize, cutNodes: minCutNodes } = computeMinVertexCut(forward, from, to);
 
-  // 3. Node-disjoint count
-  let disjointCount = 1;
-  const excluded = new Set<string>();
-  for (let i = 1; i < allPaths[0].length - 1; i++) excluded.add(allPaths[0][i]);
-  for (let iter = 0; iter < 20; iter++) {
-    const next = bfsPath(forward, from, to, excluded);
-    if (!next) break;
-    disjointCount++;
-    for (let i = 1; i < next.length - 1; i++) excluded.add(next[i]);
-  }
+  // 6. Group by first divergence
+  const pathGroups = groupPathsByDivergence(essentialPaths, shortest);
 
   return {
     from,
     to,
-    shortestPath: allPaths[0],
-    allPaths,
-    pathDag,
-    branchPoints,
-    independentCount: disjointCount,
-    isUnique: allPaths.length === 1,
+    shortestPath: shortest,
+    essentialPaths,
+    allPathCount,
+    dominators,
+    minCutNodes,
+    minCutSize,
+    pathGroups,
+    isUnique: essentialPaths.length === 1,
     reachable: true,
   };
 }

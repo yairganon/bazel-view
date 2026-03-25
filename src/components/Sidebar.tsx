@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import type { ParsedGraph, AnalysisResult, NodeMetrics, GraphEdge, RemovalImpact, PathInfo, PathDagNode } from '../graph';
+import type { ParsedGraph, AnalysisResult, NodeMetrics, GraphEdge, RemovalImpact, PathInfo, PathGroup } from '../graph';
 import { findAllPaths, computeRemovalImpacts } from '../graph';
 import Autocomplete from './Autocomplete';
 
@@ -575,7 +575,7 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
   onSelectNode: (id: string | null) => void;
   onHighlight: (nodes: Set<string>, edges: Set<string>, mode: string) => void;
 }) {
-  const [expandedRoute, setExpandedRoute] = useState<number | null>(0);
+  const [expandedGroup, setExpandedGroup] = useState<number | null>(0);
 
   if (!pathResult.reachable) {
     return (
@@ -592,132 +592,189 @@ function PathResultView({ pathResult, analysis, selectedNode, onSelectNode, onHi
     onHighlight(nodes, edges, 'path');
   };
 
-  // Compute what's unique/shared per node across all paths
-  const shortestSet = useMemo(() => new Set(pathResult.shortestPath), [pathResult]);
-
-  const totalPaths = pathResult.allPaths.length;
-
-  // Shorten a node to just the last meaningful segment
   const tag = (id: string) => {
     const parts = shortLabel(id).split('/');
     const last = parts[parts.length - 1];
     return last.includes(':') ? last.split(':').pop()! : last;
   };
 
+  const shortestSet = new Set(pathResult.shortestPath);
+
   return (
     <div className="space-y-3">
-      {/* Summary */}
-      <div className={`rounded-lg p-3 ${
-        pathResult.isUnique ? 'bg-green-950 border border-green-900' : 'bg-yellow-950 border border-yellow-900'
-      }`}>
-        <div className="flex items-center justify-between mb-1">
-          <div className="flex items-baseline gap-2">
-            <span className={`text-lg font-bold ${pathResult.isUnique ? 'text-green-400' : 'text-yellow-400'}`}>
-              {totalPaths}
-            </span>
-            <span className={`text-sm ${pathResult.isUnique ? 'text-green-300' : 'text-yellow-300'}`}>
-              {totalPaths === 1 ? 'route' : 'routes'}
-            </span>
-          </div>
-          <div className="text-xs text-gray-500">
-            {pathResult.independentCount} independent
-          </div>
+      {/* Summary stats */}
+      <div className="flex gap-2">
+        <div className="flex-1 bg-gray-900 rounded-lg p-2.5 text-center">
+          <div className="text-lg font-bold text-white">{pathResult.essentialPaths.length}</div>
+          <div className="text-[10px] text-gray-500">unique routes</div>
         </div>
-        <div className="text-xs text-gray-400">
-          {pathResult.isUnique
-            ? 'Only one route — cut any intermediate node to break this dep.'
-            : `Need to cut all ${pathResult.independentCount} independent routes to fully remove.`}
+        <div className="flex-1 bg-gray-900 rounded-lg p-2.5 text-center">
+          <div className="text-lg font-bold text-blue-400">{pathResult.shortestPath.length - 1}</div>
+          <div className="text-[10px] text-gray-500">shortest hops</div>
+        </div>
+        <div className="flex-1 bg-gray-900 rounded-lg p-2.5 text-center">
+          <div className={`text-lg font-bold ${pathResult.minCutSize === 1 ? 'text-green-400' : 'text-yellow-400'}`}>
+            {pathResult.minCutSize}
+          </div>
+          <div className="text-[10px] text-gray-500">min cuts</div>
         </div>
       </div>
 
-      {/* Route list — each route is a card */}
+      {pathResult.allPathCount > pathResult.essentialPaths.length && (
+        <div className="text-[10px] text-gray-600">
+          {pathResult.allPathCount - pathResult.essentialPaths.length} redundant paths removed (suffix extensions of shorter paths)
+        </div>
+      )}
+
+      {/* Dominator nodes — on ALL paths */}
+      {pathResult.dominators.length > 0 && (
+        <div className="bg-green-950 border border-green-900 rounded-lg p-3">
+          <div className="text-xs text-green-400 font-medium mb-1">
+            Mandatory waypoints — on every path
+          </div>
+          <div className="text-[10px] text-gray-400 mb-2">
+            Cut any one of these to break the dependency completely.
+          </div>
+          <div className="space-y-0.5">
+            {pathResult.dominators.map(id => (
+              <button
+                key={id}
+                onClick={() => onSelectNode(id)}
+                className="w-full text-left px-2 py-1 text-xs text-green-300 hover:bg-green-900/30 rounded truncate"
+              >
+                {shortLabel(id)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Min cut recommendation */}
+      {pathResult.minCutNodes.length > 0 && pathResult.minCutNodes.length !== pathResult.dominators.length && (
+        <div className="bg-red-950 border border-red-900 rounded-lg p-3">
+          <div className="text-xs text-red-400 font-medium mb-1">
+            Minimum cut — remove these {pathResult.minCutSize} to fully disconnect
+          </div>
+          <div className="space-y-0.5">
+            {pathResult.minCutNodes.map(id => (
+              <button
+                key={id}
+                onClick={() => onSelectNode(id)}
+                className="w-full text-left px-2 py-1 text-xs text-red-300 hover:bg-red-900/30 rounded truncate"
+              >
+                {shortLabel(id)}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Grouped routes */}
       <div className="space-y-1.5">
-        {pathResult.allPaths.map((path, i) => {
-          const isExpanded = expandedRoute === i;
-          const isShortest = i === 0;
-          // Nodes in this path that are NOT in the shortest path
+        <div className="text-xs text-gray-400 font-medium">
+          Routes{pathResult.pathGroups.length > 1 ? ` (${pathResult.pathGroups.length} groups)` : ''}
+        </div>
+
+        {pathResult.pathGroups.map((group, gi) => {
+          const isExpanded = expandedGroup === gi;
+          const path = group.representative;
           const uniqueNodes = path.filter(n => !shortestSet.has(n));
-          const hops = path.length - 1;
 
           return (
-            <div key={i} className="bg-gray-900 rounded-lg overflow-hidden">
-              {/* Route header — always visible */}
+            <div key={gi} className="bg-gray-900 rounded-lg overflow-hidden">
+              {/* Group header */}
               <button
                 onClick={() => {
-                  setExpandedRoute(isExpanded ? null : i);
+                  setExpandedGroup(isExpanded ? null : gi);
                   highlightPath(path);
                 }}
-                className={`w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-gray-800 ${
-                  isExpanded ? 'bg-gray-800' : ''
-                }`}
+                className={`w-full text-left px-3 py-2 hover:bg-gray-800 ${isExpanded ? 'bg-gray-800' : ''}`}
               >
-                <span className={`text-xs font-mono w-5 shrink-0 ${
-                  isShortest ? 'text-blue-400' : 'text-gray-500'
-                }`}>
-                  {i + 1}
-                </span>
-
-                {/* Compact route preview: just the key segments */}
-                <div className="flex-1 min-w-0">
-                  <div className="text-[11px] text-gray-300 truncate">
-                    {path.slice(1, -1).map(tag).join(' → ')}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-mono text-gray-500 w-5 shrink-0">{gi + 1}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] text-gray-300 truncate">
+                      via {tag(group.viaNode)}
+                      <span className="text-gray-600 ml-1">
+                        ({path.slice(1, -1).map(tag).join(' → ')})
+                      </span>
+                    </div>
                   </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  {isShortest && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-900 text-blue-300">shortest</span>}
-                  {uniqueNodes.length > 0 && !isShortest && (
-                    <span className="text-[9px] text-yellow-500">{uniqueNodes.length} different</span>
-                  )}
-                  <span className="text-[10px] text-gray-600 font-mono">{hops}h</span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {group.paths.length > 1 && (
+                      <span className="text-[9px] text-gray-600">{group.paths.length} variants</span>
+                    )}
+                    {gi === 0 && <span className="text-[9px] px-1 py-0.5 rounded bg-blue-900 text-blue-300">shortest</span>}
+                    {uniqueNodes.length > 0 && gi > 0 && (
+                      <span className="text-[9px] text-yellow-500">{uniqueNodes.length} diff</span>
+                    )}
+                    <span className="text-[10px] text-gray-600 font-mono">{path.length - 1}h</span>
+                  </div>
                 </div>
               </button>
 
-              {/* Expanded: full path with node details */}
+              {/* Expanded: full representative path */}
               {isExpanded && (
                 <div className="border-t border-gray-800">
                   {path.map((nodeId, j) => {
                     const isFrom = j === 0;
                     const isTo = j === path.length - 1;
+                    const isOnAllPaths = pathResult.dominators.includes(nodeId);
                     const isUnique = !isFrom && !isTo && !shortestSet.has(nodeId);
+                    const isCut = pathResult.minCutNodes.includes(nodeId);
 
                     return (
                       <div key={j} className="flex items-center">
-                        {/* Left rail — vertical line with dots */}
                         <div className="w-8 flex flex-col items-center shrink-0">
-                          {j > 0 && <div className={`w-0.5 h-2 ${isUnique ? 'bg-yellow-700' : 'bg-gray-700'}`} />}
+                          {j > 0 && <div className="w-0.5 h-2 bg-gray-700" />}
                           <div className={`w-2 h-2 rounded-full shrink-0 ${
                             isFrom ? 'bg-cyan-500' :
                             isTo ? 'bg-purple-500' :
+                            isCut ? 'bg-red-500' :
+                            isOnAllPaths ? 'bg-green-500' :
                             isUnique ? 'bg-yellow-500' :
                             'bg-gray-600'
                           }`} />
-                          {j < path.length - 1 && <div className={`w-0.5 h-2 ${isUnique ? 'bg-yellow-700' : 'bg-gray-700'}`} />}
+                          {j < path.length - 1 && <div className="w-0.5 h-2 bg-gray-700" />}
                         </div>
-
-                        {/* Node */}
                         <button
                           onClick={() => onSelectNode(nodeId)}
-                          className={`flex-1 min-w-0 py-1 pr-3 text-left hover:text-white ${
-                            nodeId === selectedNode ? 'text-yellow-400' : isUnique ? 'text-yellow-300' : 'text-gray-400'
+                          className={`flex-1 min-w-0 py-1 pr-2 text-left text-[11px] truncate hover:text-white ${
+                            isFrom || isTo ? 'text-white font-medium' :
+                            isUnique ? 'text-yellow-300' : 'text-gray-400'
                           }`}
                         >
-                          <span className={`text-[11px] truncate block ${
-                            isFrom || isTo ? 'text-white font-medium' : ''
-                          }`}>
-                            {shortLabel(nodeId)}
-                          </span>
+                          {shortLabel(nodeId)}
                         </button>
-
-                        {/* Tags */}
-                        <div className="pr-3 shrink-0">
+                        <div className="pr-3 shrink-0 flex gap-1">
                           {isFrom && <span className="text-[8px] px-1 py-0.5 rounded bg-cyan-900 text-cyan-400">FROM</span>}
                           {isTo && <span className="text-[8px] px-1 py-0.5 rounded bg-purple-900 text-purple-400">TO</span>}
-                          {isUnique && <span className="text-[8px] px-1 py-0.5 rounded bg-yellow-900 text-yellow-400">unique</span>}
+                          {isCut && !isFrom && !isTo && <span className="text-[8px] px-1 py-0.5 rounded bg-red-900 text-red-400">cut here</span>}
+                          {isOnAllPaths && !isFrom && !isTo && !isCut && <span className="text-[8px] px-1 py-0.5 rounded bg-green-900 text-green-400">all paths</span>}
                         </div>
                       </div>
                     );
                   })}
+
+                  {/* Show variants if more than 1 in group */}
+                  {group.paths.length > 1 && (
+                    <details className="border-t border-gray-800 px-3 py-1.5">
+                      <summary className="text-[10px] text-gray-600 cursor-pointer hover:text-gray-400">
+                        {group.paths.length - 1} variant{group.paths.length > 2 ? 's' : ''} in this group
+                      </summary>
+                      <div className="mt-1 space-y-1">
+                        {group.paths.filter(p => p !== path).map((p, vi) => (
+                          <button
+                            key={vi}
+                            onClick={() => highlightPath(p)}
+                            className="w-full text-left text-[10px] text-gray-500 hover:text-gray-300 truncate"
+                          >
+                            {p.slice(1, -1).map(tag).join(' → ')}
+                          </button>
+                        ))}
+                      </div>
+                    </details>
+                  )}
                 </div>
               )}
             </div>
